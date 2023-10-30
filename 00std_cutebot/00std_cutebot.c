@@ -1,4 +1,8 @@
+#include <stdio.h>
 #include "nrf52833.h"
+#include <nrf.h>
+
+
 
 /*
 sources:
@@ -124,10 +128,12 @@ void i2c_send(uint8_t* buf, uint8_t buflen) {
     NRF_TWI0->TASKS_STOP     = 1;
 }
 
+static uint8_t pdu[8+1] = { 0 };
+
 int main(void) {
     
     i2c_init();
-
+/*
     // motor left
     i2c_send(I2CBUF_MOTOR_LEFT_FWD,    sizeof(I2CBUF_MOTOR_LEFT_FWD));
     i2c_send(I2CBUF_MOTOR_LEFT_BACK,   sizeof(I2CBUF_MOTOR_LEFT_BACK));
@@ -148,6 +154,117 @@ int main(void) {
     i2c_send(I2CBUF_LED_RIGHT_GREEN,   sizeof(I2CBUF_LED_RIGHT_GREEN));
     i2c_send(I2CBUF_LED_RIGHT_BLUE,    sizeof(I2CBUF_LED_RIGHT_BLUE));
     i2c_send(I2CBUF_LED_RIGHT_OFF,     sizeof(I2CBUF_LED_RIGHT_OFF));
+*/
+        
+    // confiureg HF clock
+    NRF_CLOCK->TASKS_HFCLKSTART = 1;
+    while (NRF_CLOCK->EVENTS_HFCLKSTARTED == 0) {}
 
-    while(1);
+    // configure radio
+    NRF_RADIO->MODE          = (  RADIO_MODE_MODE_Ble_LR125Kbit << RADIO_MODE_MODE_Pos);
+    NRF_RADIO->TXPOWER       = (  RADIO_TXPOWER_TXPOWER_Pos8dBm << RADIO_TXPOWER_TXPOWER_Pos);
+    NRF_RADIO->PCNF0         = (                              8 << RADIO_PCNF0_LFLEN_Pos)          |
+                               (                              1 << RADIO_PCNF0_S0LEN_Pos)          |
+                               (                              0 << RADIO_PCNF0_S1LEN_Pos)          |
+                               (                              2 << RADIO_PCNF0_CILEN_Pos)          |
+                               (     RADIO_PCNF0_PLEN_LongRange << RADIO_PCNF0_PLEN_Pos)           |
+                               (                              3 << RADIO_PCNF0_TERMLEN_Pos);
+    NRF_RADIO->PCNF1         = (                    sizeof(pdu) << RADIO_PCNF1_MAXLEN_Pos)         |
+                               (                              0 << RADIO_PCNF1_STATLEN_Pos)        |
+                               (                              3 << RADIO_PCNF1_BALEN_Pos)          |
+                               (      RADIO_PCNF1_ENDIAN_Little << RADIO_PCNF1_ENDIAN_Pos)         |
+                               (   RADIO_PCNF1_WHITEEN_Disabled << RADIO_PCNF1_WHITEEN_Pos);
+    NRF_RADIO->BASE0         = 0xAAAAAAAAUL;
+    NRF_RADIO->TXADDRESS     = 0UL;
+    NRF_RADIO->RXADDRESSES   = (RADIO_RXADDRESSES_ADDR0_Enabled << RADIO_RXADDRESSES_ADDR0_Pos);
+    NRF_RADIO->TIFS          = 0;
+    NRF_RADIO->CRCCNF        = (         RADIO_CRCCNF_LEN_Three << RADIO_CRCCNF_LEN_Pos)           |
+                               (     RADIO_CRCCNF_SKIPADDR_Skip << RADIO_CRCCNF_SKIPADDR_Pos);
+    NRF_RADIO->CRCINIT       = 0xFFFFUL;
+    NRF_RADIO->CRCPOLY       = 0x00065b; // CRC poly: x^16 + x^12^x^5 + 1
+    NRF_RADIO->FREQUENCY     = 20;
+    NRF_RADIO->PACKETPTR     = (uint32_t)pdu;
+
+    // receive
+    NRF_RADIO->SHORTS = (RADIO_SHORTS_READY_START_Enabled << RADIO_SHORTS_READY_START_Pos) |
+                        (RADIO_SHORTS_END_DISABLE_Enabled << RADIO_SHORTS_END_DISABLE_Pos) |
+                        (RADIO_SHORTS_DISABLED_RXEN_Enabled << RADIO_SHORTS_DISABLED_RXEN_Pos);
+    NRF_RADIO->TASKS_RXEN    = 1;
+
+    NRF_RADIO->INTENCLR = 0xffffffff;
+    NVIC_EnableIRQ(RADIO_IRQn);
+    NRF_RADIO->INTENSET = (RADIO_INTENSET_DISABLED_Enabled << RADIO_INTENSET_DISABLED_Pos);
+
+    while(1) {
+        __WFE();
+    }
+
+
+}
+
+
+void RADIO_IRQHandler(void) {
+    if (NRF_RADIO->EVENTS_DISABLED) {
+        NRF_RADIO->EVENTS_DISABLED = 0;
+
+        if (NRF_RADIO->CRCSTATUS != RADIO_CRCSTATUS_CRCSTATUS_CRCOk) {
+            puts("Invalid CRC");
+        } else {
+            printf("Received packet (%dB): %d\n", pdu[1], pdu[2]);
+            switch (pdu[2]) {
+    
+                case 1 :  //Demarrer
+                    i2c_send(I2CBUF_MOTOR_RIGHT_FWD,   sizeof(I2CBUF_MOTOR_RIGHT_FWD));
+                    i2c_send(I2CBUF_MOTOR_LEFT_FWD,    sizeof(I2CBUF_MOTOR_LEFT_FWD));
+                    break;
+
+                case 2 : // Reculer
+                    i2c_send(I2CBUF_MOTOR_RIGHT_BACK,   sizeof(I2CBUF_MOTOR_RIGHT_BACK));
+                    i2c_send(I2CBUF_MOTOR_LEFT_BACK,    sizeof(I2CBUF_MOTOR_LEFT_BACK));
+                    break;
+  
+                case 3 : //STOP
+                    i2c_send(I2CBUF_MOTOR_LEFT_STOP,   sizeof(I2CBUF_MOTOR_LEFT_STOP));
+                    i2c_send(I2CBUF_MOTOR_RIGHT_STOP,   sizeof(I2CBUF_MOTOR_RIGHT_STOP));
+                    break;
+
+
+                case 4 : //LED
+                    i2c_send(I2CBUF_LED_LEFT_WHITE,    sizeof(I2CBUF_LED_LEFT_WHITE));
+                    i2c_send(I2CBUF_LED_RIGHT_RED,     sizeof(I2CBUF_LED_RIGHT_RED));
+                    break;
+
+                case 5: //Eteindre LED
+                    i2c_send(I2CBUF_LED_LEFT_OFF, sizeof(I2CBUF_LED_LEFT_OFF));
+                    i2c_send(I2CBUF_LED_RIGHT_OFF, sizeof(I2CBUF_LED_RIGHT_OFF));
+                    break;
+
+                case 6 : //Gauche
+                    i2c_send(I2CBUF_MOTOR_LEFT_STOP,   sizeof(I2CBUF_MOTOR_LEFT_STOP));
+                    i2c_send(I2CBUF_MOTOR_RIGHT_FWD,   sizeof(I2CBUF_MOTOR_RIGHT_FWD));
+                    i2c_send(I2CBUF_LED_RIGHT_RED, sizeof(I2CBUF_LED_RIGHT_RED));
+                    i2c_send(I2CBUF_LED_LEFT_BLUE, sizeof(I2CBUF_LED_LEFT_BLUE));
+                    break;
+
+                case 7 : //Droite
+                    i2c_send(I2CBUF_MOTOR_RIGHT_STOP,   sizeof(I2CBUF_MOTOR_RIGHT_STOP));
+                    i2c_send(I2CBUF_MOTOR_LEFT_FWD,   sizeof(I2CBUF_MOTOR_LEFT_FWD));
+                    i2c_send(I2CBUF_LED_RIGHT_RED, sizeof(I2CBUF_LED_RIGHT_RED));
+                    i2c_send(I2CBUF_LED_LEFT_BLUE, sizeof(I2CBUF_LED_LEFT_BLUE));
+                    break;
+                  
+                //i2c_send(I2CBUF_LED_LEFT_WHITE,    sizeof(I2CBUF_LED_LEFT_WHITE));
+                //i2c_send(I2CBUF_LED_LEFT_RED,      sizeof(I2CBUF_LED_LEFT_RED));
+                //i2c_send(I2CBUF_LED_LEFT_GREEN,    sizeof(I2CBUF_LED_LEFT_GREEN));
+                //i2c_send(I2CBUF_LED_LEFT_BLUE,     sizeof(I2CBUF_LED_LEFT_BLUE));
+                //i2c_send(I2CBUF_LED_LEFT_OFF,      sizeof(I2CBUF_LED_LEFT_OFF));
+                //i2c_send(I2CBUF_LED_RIGHT_WHITE,   sizeof(I2CBUF_LED_RIGHT_WHITE));
+                //i2c_send(I2CBUF_LED_RIGHT_RED,     sizeof(I2CBUF_LED_RIGHT_RED));
+                //i2c_send(I2CBUF_LED_RIGHT_GREEN,   sizeof(I2CBUF_LED_RIGHT_GREEN));
+                //i2c_send(I2CBUF_LED_RIGHT_BLUE,    sizeof(I2CBUF_LED_RIGHT_BLUE));
+                //i2c_send(I2CBUF_LED_RIGHT_OFF,     sizeof(I2CBUF_LED_RIGHT_OFF));
+
+            }
+        }
+    }
 }
