@@ -4,7 +4,7 @@
 static uint8_t pdu[] = {
     0x00, // header
        6, // length
-    0x45, 0x53, 0x49, 0x52, 0x4f, 0x49
+    0x10, 0x10, 0x10, 0x10, 0x10
 };
 
 uint32_t wait;
@@ -37,7 +37,7 @@ int main(void) {
                                (     RADIO_CRCCNF_SKIPADDR_Skip << RADIO_CRCCNF_SKIPADDR_Pos);
     NRF_RADIO->CRCINIT       = 0xFFFFUL;
     NRF_RADIO->CRCPOLY       = 0x00065b; // CRC poly: x^16 + x^12^x^5 + 1
-    NRF_RADIO->FREQUENCY     = 10;
+    NRF_RADIO->FREQUENCY     = 20;
     NRF_RADIO->PACKETPTR     = (uint32_t)pdu;
 
     NRF_RADIO->INTENCLR = 0xffffffff;
